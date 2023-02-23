@@ -19,7 +19,7 @@ contract AllowanceBasedMinter_ABV2 is SignedAllowance, Ownable {
         uint256 minted;
     }
 
-    mapping (uint256 => ArtistLimit) artistLimits;
+    mapping (uint256 => ArtistLimit) private artistLimits;
 
     constructor (address _main721ContractAddress) {
         main721Contract = IGenArt721CoreV2_PBAB(_main721ContractAddress);
@@ -48,8 +48,12 @@ contract AllowanceBasedMinter_ABV2 is SignedAllowance, Ownable {
         main721Contract.mint(to, projectId, msg.sender);
     }
     
-    function setArtistLimit(uint256 projectId, uint256 _newLimit) public onlyOwner {
-        artistLimits[projectId].limit = _newLimit;
+    function setArtistLimit(uint256 projectId, uint256 newLimit) public onlyOwner {
+        artistLimits[projectId].limit = newLimit;
+    }
+
+    function getArtistLimitAndMinted(uint256 projectId) public view returns (uint256, uint256) {
+        return (artistLimits[projectId].limit, artistLimits[projectId].minted);
     }
 
     /// @notice sets main 721 contract to mint from
@@ -68,8 +72,7 @@ contract AllowanceBasedMinter_ABV2 is SignedAllowance, Ownable {
     /// No need to use reentrancy guard as receiver is always owner
     /// @param amt amount to withdraw in wei
     function withdraw(uint256 amt) public onlyOwner {
-         address payable beneficiary = payable(owner());
-        (bool success, ) = beneficiary.call{value: amt}("");
+        (bool success, ) = payable(owner()).call{value: amt}("");
         if (!success) revert ("Withdrawal failed");
     } 
 
