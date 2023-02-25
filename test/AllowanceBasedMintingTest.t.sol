@@ -27,6 +27,8 @@ contract AllowanceBasedMintingTest is Test {
     address customer;
 
     address deployer;
+    address abWallet;
+    address hodlersMultisig;
 
     uint256 currentAllowanceId;
 
@@ -34,6 +36,9 @@ contract AllowanceBasedMintingTest is Test {
 
         deployer = address(0xde9104e5);
         vm.deal(deployer, 1e21);
+
+        abWallet = address(0xa121b10c5);
+        hodlersMultisig = address(0x60d1e125);
 
         // Deploy contracts
         vm.startPrank(deployer);
@@ -44,8 +49,11 @@ contract AllowanceBasedMintingTest is Test {
 
         allowanceSignerPrivateKey = 0x4a5113;
         allowanceSignerAddress = vm.addr(allowanceSignerPrivateKey);
-        minter = new AllowanceBasedMinter_ABV2(address(main721Contract));
+        minter = new AllowanceBasedMinter_ABV2(address(main721Contract), abWallet, hodlersMultisig);
         minter.setAllowancesSigner(allowanceSignerAddress);
+
+        minter.setCurProjectId(startingProjectId);
+        minter.setPrice(1e17);
         
         main721Contract.addMintWhitelisted(address(minter));
 
@@ -69,12 +77,12 @@ contract AllowanceBasedMintingTest is Test {
     // can not mint until project is active
     function testCanNotMintWhenNotActive() public {
         uint256 projectId = 0;
-        uint256 price = 1e17;
+        uint256 price = minter.price();
         
         (,,,, bool isActive,,,,) = main721Contract.projectTokenInfo(projectId); 
         assertEq(isActive, false);
 
-        (uint256 nonce, bytes memory signature) = buildAndSign(customer, price, projectId);
+        (uint256 nonce, bytes memory signature) = buildAndSign(customer);
 
         vm.startPrank(customer);
         vm.expectRevert("Project must exist and be active");
@@ -85,7 +93,7 @@ contract AllowanceBasedMintingTest is Test {
     // can not mint when active but paused
     function testCanNotMintWhenActiveButPaused() public {
         uint256 projectId = 0;
-        uint256 price = 1e17;
+        uint256 price = minter.price();
 
         vm.prank(managerAddress);
         main721Contract.toggleProjectIsActive(projectId);
@@ -95,7 +103,7 @@ contract AllowanceBasedMintingTest is Test {
         assertEq(isActive, true);
         assertEq(isPaused, true);
 
-        (uint256 nonce, bytes memory signature) = buildAndSign(customer, price, projectId);
+        (uint256 nonce, bytes memory signature) = buildAndSign(customer);
 
         vm.startPrank(customer);
         vm.expectRevert("Purchases are paused.");
@@ -104,31 +112,58 @@ contract AllowanceBasedMintingTest is Test {
     }
 
     // can mint when everything in order
-    function testCanMint() public {
+    function testCanMintAndEthIsDistributed() public {
         
         uint256 projectId = 0;
-        uint256 price = 1e17;
+        uint256 price = minter.price();
 
         activateProject(projectId);
 
         assertEq(main721Contract.balanceOf(customer), 0);
 
-        (uint256 nonce, bytes memory signature) = buildAndSign(customer, price, projectId);
+        (uint256 nonce, bytes memory signature) = buildAndSign(customer);
         vm.prank(customer);
         minter.order{value: price}(customer, nonce, signature);
 
         assertEq(main721Contract.balanceOf(customer), 1);
+
+        assertEq(abWallet.balance, price/10);
+        assertEq(hodlersMultisig.balance, price*9/10);
+    }
+
+    function testCanChangePriceAndMint() public {
+        
+        uint256 projectId = 0;
+        uint256 newPrice = minter.price() + 1e17;
+
+        activateProject(projectId);
+
+        vm.prank(deployer);
+        minter.setPrice(newPrice);
+
+        assertEq(minter.price(), newPrice);
+
+        assertEq(main721Contract.balanceOf(customer), 0);
+
+        (uint256 nonce, bytes memory signature) = buildAndSign(customer);
+        vm.prank(customer);
+        minter.order{value: newPrice}(customer, nonce, signature);
+
+        assertEq(main721Contract.balanceOf(customer), 1);
+
+        assertEq(abWallet.balance, newPrice/10);
+        assertEq(hodlersMultisig.balance, newPrice*9/10);
     }
 
     // can not mint when wrong value sent
     function testCanNotMintWithWrongValue() public {
         
         uint256 projectId = 0;
-        uint256 price = 1e17;
+        uint256 price = minter.price();
 
         activateProject(projectId);
 
-        (uint256 nonce, bytes memory signature) = buildAndSign(customer, price, projectId);
+        (uint256 nonce, bytes memory signature) = buildAndSign(customer);
         
         uint256 wrongValue = price/2;
         
@@ -150,18 +185,18 @@ contract AllowanceBasedMintingTest is Test {
     function testCanNotMintWithFakeNonce() public {
         
         uint256 projectId = 0;
-        uint256 price = 1e17;
+        uint256 price = minter.price();
 
         activateProject(projectId);
 
-        (uint256 nonce, bytes memory signature) = buildAndSign(customer, price, projectId);
+        (uint256 nonce, bytes memory signature) = buildAndSign(customer);
         
         // make price 1 wei
-        uint256 manipulatedNonce = nonce - price + 1; 
+        uint256 manipulatedNonce = nonce + 1; 
         
         vm.startPrank(customer);
         vm.expectRevert("!INVALID_SIGNATURE!");
-        minter.order{value: 1}(customer, manipulatedNonce, signature);
+        minter.order{value: price}(customer, manipulatedNonce, signature);
         vm.stopPrank();
 
         assertEq(main721Contract.balanceOf(customer), 0);
@@ -171,7 +206,7 @@ contract AllowanceBasedMintingTest is Test {
     function testCanNotMintWithOtherPersonSignature() public {
         
         uint256 projectId = 0;
-        uint256 price = 1e17;
+        uint256 price = minter.price();
 
         activateProject(projectId);
 
@@ -179,7 +214,7 @@ contract AllowanceBasedMintingTest is Test {
         vm.deal(darkHacker, 1e20);
         assertFalse(darkHacker == customer);
 
-        (uint256 nonce, bytes memory signature) = buildAndSign(customer, price, projectId);
+        (uint256 nonce, bytes memory signature) = buildAndSign(customer);
         
         vm.startPrank(darkHacker);
         vm.expectRevert("!INVALID_SIGNATURE!");
@@ -193,11 +228,11 @@ contract AllowanceBasedMintingTest is Test {
     function testCanNotReuseSignature() public {
         
         uint256 projectId = 0;
-        uint256 price = 1e17;
+        uint256 price = minter.price();
 
         activateProject(projectId);
 
-        (uint256 nonce, bytes memory signature) = buildAndSign(customer, price, projectId);
+        (uint256 nonce, bytes memory signature) = buildAndSign(customer);
         
         vm.startPrank(customer);
         minter.order{value: price}(customer, nonce, signature);
@@ -281,30 +316,32 @@ contract AllowanceBasedMintingTest is Test {
       function testCanWithdraw() public {
         
         uint256 projectId = 0;
-        uint256 price = 1e18;
+        uint256 price = minter.price();
 
         activateProject(projectId);
 
-        (uint256 nonce, bytes memory signature) = buildAndSign(customer, price, projectId);
+        (uint256 nonce, bytes memory signature) = buildAndSign(customer);
         vm.prank(customer);
-        minter.order{value: price}(customer, nonce, signature);
+        minter.order{value: price+111}(customer, nonce, signature);
 
         assertEq(minter.owner(), deployer);
         uint256 balanceDeployerBefore = deployer.balance;
 
-        assertEq(address(minter).balance, price);
+        uint256 minterExceedBalance = address(minter).balance;
+        //console.log(minterExceedBalance);
 
         vm.prank(deployer);
-        minter.withdraw(price);
+        minter.withdraw(address(minter).balance);
 
         uint256 balanceDeployerAfter = deployer.balance;
 
-        assertEq(balanceDeployerAfter, balanceDeployerBefore + price);
+        assertEq(balanceDeployerAfter, balanceDeployerBefore + minterExceedBalance);
+    
     }
 
-    function buildAndSign(address _customer, uint256 _price, uint256 _projectId) internal view
+    function buildAndSign(address _customer) internal 
         returns (uint256 nonce, bytes memory signature) {
-            nonce = (((currentAllowanceId << 64) + _projectId) << 128) + _price;
+            nonce = currentAllowanceId++;
             bytes32 hashToSign = (minter.createMessage(_customer, nonce)).toEthSignedMessageHash();
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(allowanceSignerPrivateKey , hashToSign);
             signature = abi.encodePacked(r,s,v);

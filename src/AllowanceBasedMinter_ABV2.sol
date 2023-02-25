@@ -11,6 +11,7 @@ contract AllowanceBasedMinter_ABV2 is SignedAllowance, Ownable {
     error NotEnoughValueProvided(uint256 expected, uint256 provided);
     error NotArtist(address sender, uint256 projectId);
     error ArtistAlreadyMinted(uint256 projectId);
+    error WithdrawFailed();
 
     IGenArt721CoreV2_PBAB public main721Contract;
 
@@ -21,24 +22,32 @@ contract AllowanceBasedMinter_ABV2 is SignedAllowance, Ownable {
 
     mapping (uint256 => ArtistLimit) private artistLimits;
 
-    constructor (address _main721ContractAddress) {
+    uint256 public price;
+    uint256 public curProjectId;
+
+    address public abWalletAddress;
+    address public hodlersMultisigAddress;
+
+    constructor (address _main721ContractAddress, address _abWalletAddress, address _hodlersMultisigAddress) {
         main721Contract = IGenArt721CoreV2_PBAB(_main721ContractAddress);
+        abWalletAddress = _abWalletAddress;
+        hodlersMultisigAddress = _hodlersMultisigAddress;
     }
 
     function order(address to, uint256 nonce, bytes memory signature) public payable {
-
-        //price is stored in the right-most 128 bits of the nonce
-        uint256 price = (nonce << 128) >> 128;
-
-        //projectId is stored in the middle 64 bytes
-        uint256 projectId = ((nonce >> 128) << 192) >>192;
 
         if (msg.value < price) revert NotEnoughValueProvided(price, msg.value);
         
         // this will throw if the allowance has already been used or is not valid
         _useAllowance(to, nonce, signature);
 
-        main721Contract.mint(to, projectId, msg.sender);
+        main721Contract.mint(to, curProjectId, msg.sender);
+
+        uint256 tenPercent = price/10;
+        (bool successAB, ) = payable(abWalletAddress).call{value: tenPercent}("");
+        (bool successH, ) = payable(hodlersMultisigAddress).call{value: (price - tenPercent)}("");
+        if (!(successAB && successH)) revert WithdrawFailed();
+
     }
 
     function artistMint(address to, uint256 projectId) public {
@@ -46,6 +55,22 @@ contract AllowanceBasedMinter_ABV2 is SignedAllowance, Ownable {
         if (artistLimits[projectId].minted == artistLimits[projectId].limit) revert ArtistAlreadyMinted(projectId);
         ++artistLimits[projectId].minted;
         main721Contract.mint(to, projectId, msg.sender);
+    }
+
+    function setPrice(uint256 _newPrice) public onlyOwner {
+        price = _newPrice;
+    }
+
+    function setCurProjectId(uint256 _newProjectId) public onlyOwner {
+        curProjectId = _newProjectId;
+    }
+
+    function setAbWallet(address _abWalletAddress) public onlyOwner {
+        abWalletAddress = _abWalletAddress;
+    }
+
+    function setHodlersMultisig(address _hodlersMultisig) public onlyOwner {
+        hodlersMultisigAddress = _hodlersMultisig;
     }
     
     function setArtistLimit(uint256 projectId, uint256 newLimit) public onlyOwner {
@@ -73,7 +98,7 @@ contract AllowanceBasedMinter_ABV2 is SignedAllowance, Ownable {
     /// @param amt amount to withdraw in wei
     function withdraw(uint256 amt) public onlyOwner {
         (bool success, ) = payable(owner()).call{value: amt}("");
-        if (!success) revert ("Withdrawal failed");
+        if (!success) revert WithdrawFailed();
     } 
 
 }
