@@ -34,6 +34,8 @@ contract AllowanceBasedMinter_ABV2 is SignedAllowance, Ownable {
         hodlersMultisigAddress = _hodlersMultisigAddress;
     }
 
+    // we do not introduce reentrancy guard to make mints cheaper, since the only address 
+    // that can in theory exploit re-entrancy here is abWalletAddress, which we trust is safe
     function order(address to, uint256 nonce, bytes memory signature) public payable {
 
         if (msg.value < price) revert NotEnoughValueProvided(price, msg.value);
