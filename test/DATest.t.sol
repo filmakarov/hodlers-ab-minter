@@ -193,6 +193,70 @@ contract DATest is Test {
         assertEq(refundReceiver.balance, expectedRefund);
     }
 
+    // can mint when everything in order
+    function testCanWithdrawRefundBeforeSoldoutAndThenWithdrawTheRest() public {
+        
+        uint256 projectId = 0;
+
+        activateProject(projectId);
+
+        setupDefaultAuction(projectId);
+
+        (, uint256 tokenPriceInWei, , ) = minter.getPriceInfo(projectId);    
+
+        // can purchase right after auction started
+        vm.warp(auctionStartTime + 1);
+        vm.prank(customer);
+        minter.purchase{value: tokenPriceInWei}(projectId);
+
+        assertEq(main721Contract.balanceOf(customer), 1);
+        totalSent[customer] += tokenPriceInWei;
+
+        // can purchase at reduced price
+        vm.warp(auctionStartTime + priceDecayHalfLifeSeconds*3);
+        (, tokenPriceInWei, , ) = minter.getPriceInfo(projectId);
+        console.log("Price %i at time %i", tokenPriceInWei, block.timestamp);
+
+        vm.prank(customer);
+        minter.purchase{value: tokenPriceInWei}(projectId);
+
+        assertEq(main721Contract.balanceOf(customer), 2);
+        totalSent[customer] += tokenPriceInWei;
+
+        assertGt(tokenPriceInWei, 1e17);
+
+        uint256 lastTokenPriceInWei = tokenPriceInWei;
+
+        // test refund to customer
+        uint256 expectedRefund = totalSent[customer] - main721Contract.balanceOf(customer)*lastTokenPriceInWei;
+        address payable refundReceiver = payable(address(0x5ef97d5ece17e5));
+        assertEq(refundReceiver.balance, 0);
+        vm.prank(customer);
+        minter.reclaimProjectExcessSettlementFundsTo(refundReceiver, projectId);
+        assertEq(refundReceiver.balance, expectedRefund);
+        console.log("1 ", refundReceiver.balance);
+
+        // assert price settled at base price
+        vm.warp(auctionStartTime + priceDecayHalfLifeSeconds*100);
+        (, tokenPriceInWei, , ) = minter.getPriceInfo(projectId);
+        assertEq(tokenPriceInWei, 1e17);
+        lastTokenPriceInWei = tokenPriceInWei;
+
+        // mint to some other customer at base price
+        address customer2 = address(0xdecaf2);
+        vm.deal(customer2, 1e21);
+        vm.prank(customer2);
+        minter.purchase{value: tokenPriceInWei}(projectId);
+        assertEq(main721Contract.balanceOf(customer2), 1);
+
+        uint256 expectedFullRefund = totalSent[customer] - main721Contract.balanceOf(customer)*lastTokenPriceInWei;
+        vm.prank(customer);
+        minter.reclaimProjectExcessSettlementFundsTo(refundReceiver, projectId);
+        console.log("2 ", refundReceiver.balance);
+        assertEq(refundReceiver.balance, expectedFullRefund);
+
+    }
+
 
     // HELPERS
 

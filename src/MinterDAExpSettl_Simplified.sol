@@ -742,8 +742,7 @@ contract MinterDAExpSettl_Simplified is
         // calculate the excess settlement funds amount
         // implicit overflow/underflow checks in solidity ^0.8
         uint256 requiredAmountPosted = numPurchased * currentSettledTokenPrice;
-        uint256 excessSettlementFunds = receipt.netPosted -
-            requiredAmountPosted;
+        uint256 excessSettlementFunds = receipt.netPosted - requiredAmountPosted;
         // update Receipt in storage
         receipt.netPosted = requiredAmountPosted.toUint232();
         // emit event indicating new receipt state
