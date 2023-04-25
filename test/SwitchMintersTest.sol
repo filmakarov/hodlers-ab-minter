@@ -5,7 +5,7 @@ import '@openzeppelin/contracts/utils/cryptography/ECDSA.sol';
 import {BasicRandomizer} from "@artblocks/BasicRandomizer.sol";
 import {GenArt721CoreV2_PBAB} from "@artblocks/engine/GenArt721CoreV2_PBAB.sol";
 import "../src/MinterDAExpSettl_Simplified.sol";
-import "../src/AllowanceBasedMinter_ABV2.sol";
+import "../src/AllowanceBasedMinter_AB.sol";
 import "../src/Test/FakeMinter.sol";
 import "@std/Test.sol";
 
@@ -20,7 +20,7 @@ contract SwitchMintersTest is Test {
     BasicRandomizer randomizer;
     GenArt721CoreV2_PBAB main721Contract;
     MinterDAExpSettl_Simplified minterDA;
-    AllowanceBasedMinter_ABV2 minterAL;
+    AllowanceBasedMinter_AB minterAL;
 
     FakeMinter fakeMinter;
 
@@ -62,7 +62,7 @@ contract SwitchMintersTest is Test {
 
         allowanceSignerPrivateKey = 0x4a5113;
         allowanceSignerAddress = vm.addr(allowanceSignerPrivateKey);
-        minterAL = new AllowanceBasedMinter_ABV2(address(main721Contract), abWallet, hodlersMultisig);
+        minterAL = new AllowanceBasedMinter_AB(address(main721Contract), abWallet, hodlersMultisig);
         minterAL.setAllowancesSigner(allowanceSignerAddress);
 
         minterAL.setCurProjectId(startingProjectId);

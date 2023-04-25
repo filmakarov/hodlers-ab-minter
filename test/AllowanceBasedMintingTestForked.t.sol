@@ -4,20 +4,29 @@ pragma solidity ^0.8.9;
 import '@openzeppelin/contracts/utils/cryptography/ECDSA.sol';
 import {BasicRandomizer} from "@artblocks/BasicRandomizer.sol";
 import {GenArt721CoreV2_PBAB} from "@artblocks/engine/GenArt721CoreV2_PBAB.sol";
-import "../src/AllowanceBasedMinter_ABV2.sol";
+import "../src/AllowanceBasedMinter_AB.sol";
 import "@std/Test.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
 /**
  *   0x7FA9385bE102ac3EAc297483Dd6233D62b3e1496 is default deployer 
  */
 
-contract AllowanceBasedMintingTest is Test {
+interface IFilterExtended is IFilter {
+    function addApprovedMinter(address _minterAddress) external;
+    function getMinterForProject(uint256 _projectId) external view returns (address);
+    function isApprovedMinter(address _minterAddress) external view returns (bool);
+    function setMinterForProject(uint256 _projectId, address _minterAddress) external;
+}
+
+contract AllowanceBasedMintingTestForked is Test {
 
     using ECDSA for bytes32;
     
     BasicRandomizer randomizer;
-    GenArt721CoreV2_PBAB main721Contract;
-    AllowanceBasedMinter_ABV2 minter;
+    IFilterExtended filter;
+    AllowanceBasedMinter_AB minter;
+    IERC721 main721Contract;
 
     uint256 allowanceSignerPrivateKey;
     address allowanceSignerAddress;
@@ -32,7 +41,12 @@ contract AllowanceBasedMintingTest is Test {
 
     uint256 currentAllowanceId;
 
+    uint256 goerliFork;
+
     function setUp() public {
+
+        goerliFork = vm.createFork("https://rpc.ankr.com/eth_goerli");
+        vm.selectFork(goerliFork);
 
         deployer = address(0xde9104e5);
         vm.deal(deployer, 1e21);
@@ -40,84 +54,50 @@ contract AllowanceBasedMintingTest is Test {
         abWallet = address(0xa121b10c5);
         hodlersMultisig = address(0x60d1e125);
 
+        filter = IFilterExtended(0x533D79A2669A22BAfeCdf1696aD6E738E4A2e07b);
+        main721Contract = IERC721(0x41cc069871054C1EfB4Aa40aF12f673eA2b6a1fC);
+
         // Deploy contracts
         vm.startPrank(deployer);
-        uint256 startingProjectId = 0;
-        randomizer = new BasicRandomizer();
-        main721Contract = new GenArt721CoreV2_PBAB("HodlersCollective", "HDC", address(randomizer), startingProjectId);
-        
 
         allowanceSignerPrivateKey = 0x4a5113;
         allowanceSignerAddress = vm.addr(allowanceSignerPrivateKey);
-        minter = new AllowanceBasedMinter_ABV2(address(main721Contract), abWallet, hodlersMultisig);
+        minter = new AllowanceBasedMinter_AB(address(filter), abWallet, hodlersMultisig);
         minter.setAllowancesSigner(allowanceSignerAddress);
 
+        uint256 startingProjectId = 1;
         minter.setCurProjectId(startingProjectId);
         minter.setPrice(1e17);
-        
-        main721Contract.addMintWhitelisted(address(minter));
 
-        // Setup first AB project 
-        managerAddress = address(0xa11ce);
-        artistAddress = address(0xdeafbeef);
-
-        main721Contract.addWhitelisted(managerAddress);
         vm.stopPrank();
 
-        vm.prank(managerAddress);
-        main721Contract.addProject("Genesis", payable(artistAddress), 1e17);
+        vm.startPrank(0x8cc0019C16bced6891a96d32FF36FeAB4A663a40); //admin
+        filter.addApprovedMinter(address(minter));
+        filter.setMinterForProject(startingProjectId, address(minter));
+        vm.stopPrank();
 
         customer = address(0xdecaf);
         vm.deal(customer, 100*1e18);
 
         vm.roll(100);
         currentAllowanceId = (block.timestamp + block.number) % 1000;
+
+        artistAddress = 0xe18Fc96ba325Ef22746aDA9A82d521845a2c16f8;
     }
 
-    // can not mint until project is active
-    function testCanNotMintWhenNotActive() public {
-        uint256 projectId = 0;
-        uint256 price = minter.price();
-        
-        (,,,, bool isActive,,,,) = main721Contract.projectTokenInfo(projectId); 
-        assertEq(isActive, false);
-
-        (uint256 nonce, bytes memory signature) = buildAndSign(customer);
-
-        vm.startPrank(customer);
-        vm.expectRevert("Project must exist and be active");
-        minter.order{value: price}(customer, nonce, signature);
-        vm.stopPrank();
+    function testSetupSuccessful() public {
+        assertEq(filter.getMinterForProject(1), address(minter));
+        assertEq(filter.isApprovedMinter(address(minter)), true);
     }
 
-    // can not mint when active but paused
-    function testCanNotMintWhenActiveButPaused() public {
-        uint256 projectId = 0;
-        uint256 price = minter.price();
-
-        vm.prank(managerAddress);
-        main721Contract.toggleProjectIsActive(projectId);
-        
-        (,,,, bool isActive,,,,) = main721Contract.projectTokenInfo(projectId); 
-        (,,,, bool isPaused) = main721Contract.projectScriptInfo(projectId);
-        assertEq(isActive, true);
-        assertEq(isPaused, true);
-
-        (uint256 nonce, bytes memory signature) = buildAndSign(customer);
-
-        vm.startPrank(customer);
-        vm.expectRevert("Purchases are paused.");
-        minter.order{value: price}(customer, nonce, signature);
-        vm.stopPrank(); 
-    }
 
     // can mint when everything in order
     function testCanMintAndEthIsDistributed() public {
         
-        uint256 projectId = 0;
+        uint256 projectId = 1;
         uint256 price = minter.price();
 
-        activateProject(projectId);
+        //activateProject(projectId);
 
         assertEq(main721Contract.balanceOf(customer), 0);
 
@@ -131,12 +111,13 @@ contract AllowanceBasedMintingTest is Test {
         assertEq(hodlersMultisig.balance, price*9/10);
     }
 
+
     function testCanChangePriceAndMint() public {
         
-        uint256 projectId = 0;
+        uint256 projectId = 1;
         uint256 newPrice = minter.price() + 1e17;
 
-        activateProject(projectId);
+        //activateProject(projectId);
 
         vm.prank(deployer);
         minter.setPrice(newPrice);
@@ -158,10 +139,10 @@ contract AllowanceBasedMintingTest is Test {
     // can not mint when wrong value sent
     function testCanNotMintWithWrongValue() public {
         
-        uint256 projectId = 0;
+        uint256 projectId = 1;
         uint256 price = minter.price();
 
-        activateProject(projectId);
+        //activateProject(projectId);
 
         (uint256 nonce, bytes memory signature) = buildAndSign(customer);
         
@@ -170,7 +151,7 @@ contract AllowanceBasedMintingTest is Test {
         vm.startPrank(customer);
         vm.expectRevert(
             abi.encodeWithSelector(
-                AllowanceBasedMinter_ABV2.NotEnoughValueProvided.selector, 
+                AllowanceBasedMinter_AB.NotEnoughValueProvided.selector, 
                 price,
                 wrongValue
             )
@@ -184,10 +165,10 @@ contract AllowanceBasedMintingTest is Test {
     // can not mint with changes in nonce  
     function testCanNotMintWithFakeNonce() public {
         
-        uint256 projectId = 0;
+        uint256 projectId = 1;
         uint256 price = minter.price();
 
-        activateProject(projectId);
+        //activateProject(projectId);
 
         (uint256 nonce, bytes memory signature) = buildAndSign(customer);
         
@@ -205,10 +186,10 @@ contract AllowanceBasedMintingTest is Test {
     // can not mint with other person's signature
     function testCanNotMintWithOtherPersonSignature() public {
         
-        uint256 projectId = 0;
+        uint256 projectId = 1;
         uint256 price = minter.price();
 
-        activateProject(projectId);
+        //activateProject(projectId);
 
         address darkHacker = address(0x7ac1c35);
         vm.deal(darkHacker, 1e20);
@@ -227,10 +208,10 @@ contract AllowanceBasedMintingTest is Test {
     // can not reuse signature
     function testCanNotReuseSignature() public {
         
-        uint256 projectId = 0;
+        uint256 projectId = 1;
         uint256 price = minter.price();
 
-        activateProject(projectId);
+        //activateProject(projectId);
 
         (uint256 nonce, bytes memory signature) = buildAndSign(customer);
         
@@ -250,7 +231,7 @@ contract AllowanceBasedMintingTest is Test {
     // artist's mint only one
     function testArtistCanMintWithinLimit() public {
         
-        uint256 projectId = 0;
+        uint256 projectId = 1;
 
         vm.prank(deployer);
         minter.setArtistLimit(projectId, 1);
@@ -268,7 +249,7 @@ contract AllowanceBasedMintingTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                AllowanceBasedMinter_ABV2.ArtistAlreadyMinted.selector, 
+                AllowanceBasedMinter_AB.ArtistAlreadyMinted.selector, 
                 projectId
             )
         );
@@ -281,7 +262,7 @@ contract AllowanceBasedMintingTest is Test {
     // not artist can't mint with artistMint
     function testNotArtistCantMint() public {
         
-        uint256 projectId = 0;
+        uint256 projectId = 1;
 
         vm.prank(deployer);
         minter.setArtistLimit(projectId, 1);
@@ -297,7 +278,7 @@ contract AllowanceBasedMintingTest is Test {
         
         vm.expectRevert(
             abi.encodeWithSelector(
-                AllowanceBasedMinter_ABV2.NotArtist.selector, 
+                AllowanceBasedMinter_AB.NotArtist.selector, 
                 notArtistAddress,
                 projectId
             )
@@ -315,10 +296,10 @@ contract AllowanceBasedMintingTest is Test {
     // withdrawal tests
       function testCanWithdraw() public {
         
-        uint256 projectId = 0;
+        uint256 projectId = 1;
         uint256 price = minter.price();
 
-        activateProject(projectId);
+        //activateProject(projectId);
 
         (uint256 nonce, bytes memory signature) = buildAndSign(customer);
         vm.prank(customer);
@@ -337,7 +318,7 @@ contract AllowanceBasedMintingTest is Test {
 
         assertEq(balanceDeployerAfter, balanceDeployerBefore + minterExceedBalance);
     
-    }
+    } 
 
     function buildAndSign(address _customer) internal 
         returns (uint256 nonce, bytes memory signature) {
@@ -347,6 +328,9 @@ contract AllowanceBasedMintingTest is Test {
             signature = abi.encodePacked(r,s,v);
     }
 
+   
+
+    /*
     function activateProject(uint256 _projectId) internal {
         vm.prank(managerAddress);
         main721Contract.toggleProjectIsActive(_projectId);
@@ -359,5 +343,6 @@ contract AllowanceBasedMintingTest is Test {
         assertEq(isActive, true);
         assertEq(isPaused, false);
     }
+    */
 
 }
